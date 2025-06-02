@@ -1,3 +1,6 @@
 [submodule "dts"]
 	path = dts
 	url = https://github.com/smalinux/BeagleBoard-DeviceTrees
+[submodule "linux"]
+	path = linux
+	url = https://github.com/beagleboard/linux

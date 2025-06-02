@@ -19,7 +19,8 @@ clean:
 
 # Install target (optional)
 install: all
-	sudo insmod gpioctrl.ko
+	#sudo insmod gpioctrl.ko
+	sudo insmod gpioctrl_1.ko
 
 # Uninstall target (optional)
 uninstall:

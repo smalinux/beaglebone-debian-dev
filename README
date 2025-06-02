@@ -8,7 +8,12 @@ Update Linux
 +remote: (https://github.com/smalinux/linux)
 +branch: (smalinux-5.10.168)
 
+
 cd bb-kernel
+./build_kernel.sh       # First build
+./tools/rebuild.sh      # rebuild
+
+
 ls -la deploy/
     # You should see:
     # ${KERNEL_UTS}.zImage           - Kernel image

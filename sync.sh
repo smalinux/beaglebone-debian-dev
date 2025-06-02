@@ -31,6 +31,7 @@ FILES_TO_SYNC=(
     "boot/uEnv.txt"
     "src/"
     "opt/source/dtb-5.10-ti/src/arm/am335x-boneblack.dts"
+    "/proc/config.gz"
 )
 
 # Colors

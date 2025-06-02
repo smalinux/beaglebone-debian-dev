@@ -1,3 +1,25 @@
 
 
 .
+
+
+Update Linux
+===============================================================================
++remote: (https://github.com/smalinux/linux)
++branch: (smalinux-5.10.168)
+
+cd bb-kernel
+ls -la deploy/
+    # You should see:
+    # ${KERNEL_UTS}.zImage           - Kernel image
+    # ${KERNEL_UTS}-modules.tar.gz   - Kernel modules
+    # ${KERNEL_UTS}-dtbs.tar.gz      - Device tree files
+    # config-${KERNEL_UTS}           - Kernel config
+    # kernel_version                 - Version file
+
+# Look for deployment tools
+ls -la tools/
+./tools/install_*.sh --help
+
+# If available, use:
+./tools/install_kernel.sh --ssh debian@<beaglebone-ip>

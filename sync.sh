@@ -29,7 +29,7 @@ LOCAL_BASE="./target"
 # File list - Add/remove files as needed
 FILES_TO_SYNC=(
     "boot/uEnv.txt"
-    "src/"
+    "/root/"
     "opt/source/dtb-5.10-ti/src/arm/am335x-boneblack.dts"
     "/proc/config.gz"
     "/etc/issue"

@@ -32,6 +32,8 @@ FILES_TO_SYNC=(
     "src/"
     "opt/source/dtb-5.10-ti/src/arm/am335x-boneblack.dts"
     "/proc/config.gz"
+    "/etc/issue"
+    "/etc/issue.net"
 )
 
 # Colors

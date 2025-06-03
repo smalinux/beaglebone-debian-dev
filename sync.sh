@@ -22,7 +22,7 @@
 # =============================================================================
 
 # Configuration
-REMOTE_USER="debian"
+REMOTE_USER="root"
 REMOTE_HOST="192.168.0.98"
 LOCAL_BASE="./target"
 

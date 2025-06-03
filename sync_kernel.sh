@@ -1,404 +1,433 @@
 #!/bin/bash
+#
+# Enhanced Kernel Sync Script - Debian Package Method
+# Uses official 'make bindeb-pkg' to create professional .deb packages
+# Based on BeagleBoard.org CI/CD pipeline approach
+#
+# Usage:
+#   ./sync_kernel.sh [options]
+#
+# Options:
+#   build-only    - Only build packages, don't deploy
+#   deploy-only   - Only deploy existing packages
+#   clean-build   - Clean before building packages
+#   no-debug      - Build without debug packages (faster)
+#   help          - Show this help
+#
 
-# =============================================================================
-# BeagleBone Kernel Deployment Script
-# =============================================================================
-#
-# DESCRIPTION:
-#   Automated kernel deployment script for BeagleBone development workflow.
-#   This script copies all kernel build artifacts from the local bb-kernel
-#   deploy directory to the BeagleBone's /boot partition and properly extracts
-#   archives for immediate use.
-#
-# PURPOSE:
-#   Simplifies the kernel development cycle by automating the deployment of:
-#   - Compiled kernel image (zImage)
-#   - Device tree blobs (DTBs)
-#   - Kernel modules
-#   - Kernel configuration files
-#
-#   Eliminates manual file copying and extraction steps that are error-prone
-#   and time-consuming during iterative kernel development.
-#
-# WORKFLOW INTEGRATION:
-#   This script is designed to work with the standard BeagleBone kernel
-#   build process using Robert C. Nelson's bb-kernel repository:
-#
-#   1. Clone and build kernel:
-#      git clone https://github.com/RobertCNelson/bb-kernel
-#      cd bb-kernel
-#      git checkout am33x-v5.10  # or desired branch
-#      make
-#
-#   2. Deploy kernel:
-#      ./sync_kernel.sh push
-#
-#   3. Reboot BeagleBone to use new kernel
-#
-# KERNEL ARTIFACTS HANDLED:
-#   The script processes these standard bb-kernel build outputs:
-#
-#   *.zImage              -> /boot/zImage (kernel image)
-#   *-dtbs.tar.gz        -> /boot/*.dtb (device tree blobs, extracted)
-#   *-modules.tar.gz     -> /lib/modules/ (kernel modules, extracted)
-#   config-*             -> /boot/config-* (kernel configuration)
-#
-# SYSTEM REQUIREMENTS:
-#
-#   Local Development Machine:
-#   - Linux system with bash shell
-#   - rsync package installed
-#   - SSH client
-#   - Built bb-kernel with artifacts in bb-kernel/deploy/
-#
-#   BeagleBone Target:
-#   - SSH daemon running
-#   - Root access configured
-#   - Sufficient space in /boot and /lib/modules partitions
-#
-# NETWORK SETUP:
-#   - BeagleBone accessible via SSH on network
-#   - Default target: root@192.168.0.98
-#   - SSH key authentication strongly recommended for automation
-#
-# PREREQUISITES - DETAILED SETUP:
-#
-#   1. SSH Key Authentication (REQUIRED for automation):
-#      # Generate SSH key pair if not exists
-#      ssh-keygen -t rsa -b 4096 -C "beaglebone-dev"
-#
-#      # Copy public key to BeagleBone
-#      ssh-copy-id root@192.168.0.98
-#
-#      # Test passwordless connection
-#      ssh root@192.168.0.98 'uname -a'
-#
-#   2. Build Environment Setup:
-#      # Clone bb-kernel repository
-#      git clone https://github.com/RobertCNelson/bb-kernel
-#      cd bb-kernel
-#
-#      # Checkout desired kernel version
-#      git checkout am33x-v5.10
-#
-#      # Install build dependencies (Ubuntu/Debian)
-#      sudo apt-get install build-essential git lzop u-boot-tools
-#
-#      # Build kernel (creates artifacts in deploy/)
-#      make
-#
-#   3. Network Configuration:
-#      # Ensure BeagleBone is accessible
-#      ping 192.168.0.98
-#
-#      # Update REMOTE_HOST variable if using different IP
-#      # Edit script: REMOTE_HOST="your.beaglebone.ip"
-#
-# SAFETY FEATURES:
-#   - Automatic backup of current kernel before deployment
-#   - Connection testing before deployment attempts
-#   - Comprehensive error checking and status reporting
-#   - Non-destructive status checking mode
-#
-# BACKUP SYSTEM:
-#   Current kernel image is automatically backed up to:
-#   /boot/backup/zImage.backup.YYYYMMDD_HHMMSS
-#
-#   This allows recovery if new kernel fails to boot:
-#   # Boot from backup (from BeagleBone console)
-#   cp /boot/backup/zImage.backup.YYYYMMDD_HHMMSS /boot/zImage
-#   reboot
-#
-# DEPLOYMENT PROCESS:
-#   The script performs these steps in order:
-#
-#   1. Validate local build artifacts exist
-#   2. Test SSH connectivity to BeagleBone
-#   3. Create timestamped backup of current kernel
-#   4. Transfer all files from bb-kernel/deploy/ to /boot/
-#   5. Extract DTBs archive to /boot/ (*.dtb files)
-#   6. Extract modules archive to /lib/modules/
-#   7. Run depmod -a to update module dependencies
-#   8. Set appropriate file permissions
-#   9. Provide reboot instructions
-#
-# ERROR HANDLING:
-#   - SSH connection failures are detected and reported
-#   - Missing build artifacts cause early termination
-#   - Transfer failures are caught with detailed error messages
-#   - Archive extraction errors are reported but don't halt deployment
-#
-# CONFIGURATION:
-#   Edit these variables at the top of the script as needed:
-#
-#   REMOTE_USER      - SSH username (default: root)
-#   REMOTE_HOST      - BeagleBone IP address (default: 192.168.0.98)
-#   LOCAL_DEPLOY_DIR - Local build artifacts path (default: ./bb-kernel/deploy)
-#   REMOTE_BOOT_DIR  - Target boot directory (default: /boot)
-#
-# USAGE EXAMPLES:
-#
-#   # Deploy kernel (most common usage)
-#   ./sync_kernel.sh push
-#   ./sync_kernel.sh        # 'push' is default action
-#
-#   # Check deployment status
-#   ./sync_kernel.sh status
-#
-#   # Get help
-#   ./sync_kernel.sh help
-#   ./sync_kernel.sh --help
-#   ./sync_kernel.sh -h
-#
-# TROUBLESHOOTING:
-#
-#   Problem: "Deploy directory not found"
-#   Solution: Build kernel first with 'cd bb-kernel && make'
-#
-#   Problem: "Cannot connect to BeagleBone"
-#   Solution: Check network, SSH service, and authentication setup
-#
-#   Problem: "Permission denied"
-#   Solution: Ensure SSH key authentication is properly configured
-#
-#   Problem: "No space left on device"
-#   Solution: Clean old kernels from /boot or expand boot partition
-#
-#   Problem: BeagleBone won't boot after update
-#   Solution: Use backup kernel from /boot/backup/ directory
-#
-# DEVELOPMENT WORKFLOW:
-#
-#   Typical kernel development cycle:
-#
-#   1. Modify kernel source or device tree
-#   2. Build: cd bb-kernel && make
-#   3. Deploy: ./sync_kernel.sh push
-#   4. Test: ssh root@192.168.0.98 'reboot'
-#   5. Verify: ssh root@192.168.0.98 'uname -r'
-#   6. Repeat as needed
-#
-# INTEGRATION WITH BUILD SYSTEMS:
-#
-#   Can be integrated into automated build pipelines:
-#
-#   # Makefile target
-#   deploy-kernel:
-#   	./sync_kernel.sh push
-#
-#   # CI/CD pipeline step
-#   - name: Deploy Kernel
-#     run: ./sync_kernel.sh push
-#
-# OUTPUT AND LOGGING:
-#   - Color-coded status messages for easy reading
-#   - Progress indicators during file transfers
-#   - Deployment summary with next steps
-#   - All operations logged to console for debugging
-#
-# COMPATIBILITY:
-#   - Tested with bb-kernel am33x-v5.10 branch
-#   - Compatible with BeagleBone Black, Green, AI platforms
-#   - Works with standard Debian-based BeagleBone images
-#   - Requires bash shell (not sh/dash compatible)
-#
-# SECURITY CONSIDERATIONS:
-#   - Uses SSH key authentication (no passwords in scripts)
-#   - Root access required for /boot and /lib/modules modifications
-#   - Network traffic encrypted via SSH
-#   - No sensitive data stored in script
-#
-# VERSION: 1.0
-# AUTHOR: BeagleBone Development Team
-# LICENSE: MIT
-# REPOSITORY: https://github.com/example/beaglebone-kernel-tools
-#
-# =============================================================================
+set -e
 
 # Configuration
-REMOTE_USER="root"
-REMOTE_HOST="192.168.0.98"
-LOCAL_DEPLOY_DIR="./bb-kernel/deploy"
-REMOTE_BOOT_DIR="/boot"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BB_KERNEL_DIR="$SCRIPT_DIR/bb-kernel"
+KERNEL_DIR="$BB_KERNEL_DIR/KERNEL"
+DEPLOY_DIR="$BB_KERNEL_DIR/deploy"
 
-# Colors
+# Remote configuration
+REMOTE_HOST="${REMOTE_HOST:-192.168.0.98}"
+REMOTE_USER="${REMOTE_USER:-root}"
+REMOTE_TMP_DIR="/tmp/kernel-packages"
+
+# Build configuration
+CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
+ARCH="${ARCH:-arm}"
+CORES=$(nproc)
+
+# Package configuration
+KDEB_SOURCENAME="linux-beaglebone"
+KDEB_PKGVERSION="1.0"
+
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-
-# Check SSH connection
-check_connection() {
-    print_status "Testing SSH connection to $REMOTE_USER@$REMOTE_HOST..."
-    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" exit 2>/dev/null; then
-        print_success "SSH connection OK"
-        return 0
-    else
-        print_error "Cannot connect to $REMOTE_USER@$REMOTE_HOST"
-        return 1
-    fi
+# Functions
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-# Push all files from deploy to /boot
-push_kernel() {
-    print_status "Pushing all files from $LOCAL_DEPLOY_DIR to $REMOTE_BOOT_DIR..."
-
-    if [[ ! -d "$LOCAL_DEPLOY_DIR" ]]; then
-        print_error "Deploy directory not found: $LOCAL_DEPLOY_DIR"
-        echo "Please build the kernel first: cd bb-kernel && make"
-        return 1
-    fi
-
-    # Check if deploy directory has files
-    if [[ -z "$(ls -A "$LOCAL_DEPLOY_DIR" 2>/dev/null)" ]]; then
-        print_error "Deploy directory is empty: $LOCAL_DEPLOY_DIR"
-        return 1
-    fi
-
-    # Create backup
-    print_status "Creating backup of current kernel..."
-    ssh "$REMOTE_USER@$REMOTE_HOST" "
-        mkdir -p /boot/backup
-        cp /boot/zImage /boot/backup/zImage.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
-    "
-
-    # Copy all files
-    print_status "Copying all deploy files..."
-    if rsync -avz --progress "$LOCAL_DEPLOY_DIR/" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_BOOT_DIR/"; then
-        print_success "All files copied successfully"
-
-        # Extract DTBs and modules if they exist
-        print_status "Extracting archives and setting up kernel..."
-        ssh "$REMOTE_USER@$REMOTE_HOST" "
-            cd /boot
-
-            # Extract DTBs archive if it exists
-            if ls *-dtbs.tar.gz >/dev/null 2>&1; then
-                echo 'Extracting device tree blobs...'
-                tar -xzf *-dtbs.tar.gz && rm *-dtbs.tar.gz
-            fi
-
-            # Extract modules archive if it exists
-            if ls *-modules.tar.gz >/dev/null 2>&1; then
-                echo 'Extracting kernel modules...'
-                cd /lib/modules
-                tar -xzf /boot/*-modules.tar.gz && rm /boot/*-modules.tar.gz
-                depmod -a
-            fi
-
-            # Create vmlinuz symlink from zImage
-            cd /boot
-            if ls *.zImage >/dev/null 2>&1; then
-                ZIMAGE_FILE=\$(ls *.zImage | head -1)
-                KERNEL_VERSION=\$(echo \$ZIMAGE_FILE | sed 's/.zImage//')
-
-                echo \"Creating vmlinuz-\$KERNEL_VERSION from \$ZIMAGE_FILE\"
-                cp \$ZIMAGE_FILE vmlinuz-\$KERNEL_VERSION
-
-                # Also create the standard zImage symlink
-                cp \$ZIMAGE_FILE zImage
-
-                echo \"Kernel files created:\"
-                ls -la zImage vmlinuz-\$KERNEL_VERSION \$ZIMAGE_FILE
-            fi
-        "
-
-        # Update uEnv.txt to use new kernel
-        print_status "Updating uEnv.txt for new kernel..."
-        ssh "$REMOTE_USER@$REMOTE_HOST" "
-            cd /boot
-
-            # Find the new kernel version from zImage filename
-            NEW_KERNEL=\$(ls *.zImage | head -1 | sed 's/.zImage//')
-
-            if [[ -n \"\$NEW_KERNEL\" ]]; then
-                echo \"Found new kernel: \$NEW_KERNEL\"
-
-                # Backup current uEnv.txt
-                cp uEnv.txt uEnv.txt.backup.\$(date +%Y%m%d_%H%M%S)
-
-                # Update uname_r line
-                sed -i \"s/^uname_r=.*/uname_r=\$NEW_KERNEL/\" uEnv.txt
-
-                echo \"Updated uEnv.txt to use kernel: \$NEW_KERNEL\"
-                echo \"Current uEnv.txt content:\"
-                cat uEnv.txt
-            else
-                echo \"Warning: Could not determine new kernel version\"
-            fi
-        "
-
-        print_status "Setting permissions..."
-        ssh "$REMOTE_USER@$REMOTE_HOST" "
-            chmod 644 /boot/*.zImage 2>/dev/null || true
-            chmod 644 /boot/config-* 2>/dev/null || true
-            chmod 644 /boot/*.dtb 2>/dev/null || true
-        "
-
-        echo
-        print_success "=========================================="
-        print_success "Kernel update complete!"
-        print_success "=========================================="
-        print_warning "IMPORTANT: Reboot BeagleBone to use new kernel:"
-        echo "  ssh $REMOTE_USER@$REMOTE_HOST 'reboot'"
-        print_warning "=========================================="
-
-        return 0
-    else
-        print_error "Failed to copy files"
-        return 1
-    fi
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
-# Show status
-show_status() {
-    print_status "Kernel Update Status"
-    echo "===================="
-
-    echo "Configuration:"
-    echo "  Local:  $LOCAL_DEPLOY_DIR"
-    echo "  Remote: $REMOTE_USER@$REMOTE_HOST:$REMOTE_BOOT_DIR"
-    echo
-
-    echo "Local deploy files:"
-    if [[ -d "$LOCAL_DEPLOY_DIR" ]]; then
-        ls -lh "$LOCAL_DEPLOY_DIR" 2>/dev/null || echo "  Directory empty or not accessible"
-    else
-        echo "  Deploy directory not found"
-    fi
-
-    echo
-    print_status "Current kernel on BeagleBone:"
-    ssh -o ConnectTimeout=2 "$REMOTE_USER@$REMOTE_HOST" "uname -r" 2>/dev/null || echo "  Unable to check"
-
-    echo
-    print_status "Files in remote /boot:"
-    ssh -o ConnectTimeout=2 "$REMOTE_USER@$REMOTE_HOST" "ls -lh /boot/*.zImage /boot/config-* 2>/dev/null" || echo "  Unable to check"
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Main script
-case "${1:-push}" in
-    push)
-        check_connection || exit 1
-        push_kernel
-        ;;
-    status)
-        show_status
-        ;;
-    *)
-        echo "Usage: $0 [push|status]"
-        echo
-        echo "Commands:"
-        echo "  push     - Copy all files from bb-kernel/deploy/ to /boot/ (default)"
-        echo "  status   - Show current status"
-        echo
-        echo "Simple kernel update - copies everything from deploy to /boot"
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    exit 1
+}
+
+show_help() {
+    cat << EOF
+Enhanced Kernel Sync Script - Debian Package Method
+
+This script builds professional .deb packages using 'make bindeb-pkg'
+and deploys them to your BeagleBone device.
+
+Usage: $0 [options]
+
+Options:
+  build-only     Build packages only, don't deploy
+  deploy-only    Deploy existing packages only
+  clean-build    Clean kernel build before creating packages
+  no-debug       Disable debug packages for faster builds
+  help           Show this help message
+
+Environment Variables:
+  REMOTE_HOST    Target device IP (default: 192.168.0.98)
+  REMOTE_USER    SSH user (default: root)
+  CROSS_COMPILE  Cross compiler prefix (default: arm-linux-gnueabihf-)
+
+Examples:
+  $0                    # Build and deploy packages
+  $0 build-only         # Only build packages
+  $0 deploy-only        # Only deploy existing packages
+  $0 clean-build        # Clean build then deploy
+  $0 no-debug           # Build without debug packages
+
+The script creates these packages:
+  - linux-image-VERSION.deb         (kernel image)
+  - linux-headers-VERSION.deb       (development headers)
+  - linux-firmware-image-VERSION.deb (firmware, if any)
+  - linux-image-VERSION-dbg.deb     (debug symbols, optional)
+  - linux-libc-dev.deb             (userspace headers)
+
+EOF
+}
+
+check_dependencies() {
+    print_status "Checking build dependencies..."
+
+    local missing_deps=()
+    local required_deps=(
+        "build-essential" "bc" "kmod" "cpio" "flex"
+        "libncurses5-dev" "libelf-dev" "libssl-dev"
+        "dwarves" "bison" "fakeroot" "rsync"
+    )
+
+    for dep in "${required_deps[@]}"; do
+        if ! dpkg -l "$dep" >/dev/null 2>&1; then
+            missing_deps+=("$dep")
+        fi
+    done
+
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        print_error "Missing dependencies: ${missing_deps[*]}"
+        echo "Install with: sudo apt install ${missing_deps[*]}"
         exit 1
-        ;;
-esac
+    fi
+
+    print_success "All dependencies satisfied"
+}
+
+detect_kernel_version() {
+    if [[ ! -f "$BB_KERNEL_DIR/kernel_version" ]]; then
+        print_error "Cannot find kernel_version file in $BB_KERNEL_DIR"
+    fi
+
+    KERNEL_VERSION=$(cat "$BB_KERNEL_DIR/kernel_version")
+    print_status "Detected kernel version: $KERNEL_VERSION"
+}
+
+prepare_kernel_config() {
+    print_status "Preparing kernel configuration..."
+
+    cd "$KERNEL_DIR"
+
+    # Disable debug info if requested (speeds up build significantly)
+    if [[ "$1" == "no-debug" ]]; then
+        print_status "Disabling debug info for faster build..."
+        scripts/config --disable DEBUG_INFO
+        scripts/config --disable DEBUG_INFO_SPLIT
+        scripts/config --disable DEBUG_INFO_REDUCED
+        scripts/config --disable DEBUG_INFO_COMPRESSED
+        scripts/config --set-val DEBUG_INFO_NONE y
+        make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
+    fi
+
+    # Ensure we have a valid configuration
+    if [[ ! -f .config ]]; then
+        print_status "No .config found, using bb.org_defconfig..."
+        make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" bb.org_defconfig
+    fi
+
+    print_success "Kernel configuration ready"
+}
+
+build_debian_packages() {
+    local clean_build="$1"
+    local no_debug="$2"
+
+    print_status "Building Debian packages using bindeb-pkg..."
+
+    cd "$KERNEL_DIR"
+
+    # Clean if requested
+    if [[ "$clean_build" == "clean" ]]; then
+        print_status "Cleaning kernel build..."
+        make ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" clean
+    fi
+
+    # Prepare configuration
+    prepare_kernel_config "$no_debug"
+
+    # Extract LOCALVERSION from kernel_version
+    # Format: 5.10.233-bone79 -> LOCALVERSION=-bone79
+    local localversion=$(echo "$KERNEL_VERSION" | sed 's/^[0-9]\+\.[0-9]\+\.[0-9]\+//')
+
+    print_status "Building with LOCALVERSION=$localversion"
+    print_status "Using $CORES parallel jobs..."
+    print_status "This may take 10-30 minutes depending on your system..."
+
+    # Build packages using official Debian method
+    # This is the same approach used in BeagleBoard.org CI pipeline
+    time make -j"$CORES" \
+        ARCH="$ARCH" \
+        CROSS_COMPILE="$CROSS_COMPILE" \
+        LOCALVERSION="$localversion" \
+        KDEB_SOURCENAME="$KDEB_SOURCENAME" \
+        KDEB_PKGVERSION="$KDEB_PKGVERSION" \
+        KDEB_COMPRESS=xz \
+        bindeb-pkg
+
+    # Move packages to deploy directory for organization
+    mkdir -p "$DEPLOY_DIR/packages"
+    mv ../*.deb "$DEPLOY_DIR/packages/" 2>/dev/null || true
+
+    print_success "Debian packages built successfully!"
+
+    # List created packages
+    print_status "Created packages:"
+    ls -la "$DEPLOY_DIR/packages/"*.deb
+}
+
+validate_packages() {
+    print_status "Validating created packages..."
+
+    local package_dir="$DEPLOY_DIR/packages"
+    local required_packages=("linux-image" "linux-headers")
+    local missing_packages=()
+
+    for pkg in "${required_packages[@]}"; do
+        if ! ls "$package_dir"/${pkg}-*.deb >/dev/null 2>&1; then
+            missing_packages+=("$pkg")
+        fi
+    done
+
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        print_error "Missing required packages: ${missing_packages[*]}"
+    fi
+
+    # Check package integrity
+    for deb in "$package_dir"/*.deb; do
+        if ! dpkg-deb --info "$deb" >/dev/null 2>&1; then
+            print_error "Corrupt package: $(basename "$deb")"
+        fi
+    done
+
+    print_success "All packages validated successfully"
+}
+
+deploy_packages() {
+    print_status "Deploying packages to $REMOTE_HOST..."
+
+    local package_dir="$DEPLOY_DIR/packages"
+
+    # Test SSH connection
+    if ! ssh -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" 'echo "SSH OK"' >/dev/null 2>&1; then
+        print_error "Cannot connect to $REMOTE_HOST via SSH"
+    fi
+
+    # Create remote directory
+    ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_TMP_DIR"
+
+    # Transfer packages
+    print_status "Transferring packages..."
+    rsync -avz --progress "$package_dir"/*.deb "$REMOTE_USER@$REMOTE_HOST:$REMOTE_TMP_DIR/"
+
+    print_success "Packages transferred successfully"
+
+    # Show package information on remote
+    print_status "Package information on target device:"
+    ssh "$REMOTE_USER@$REMOTE_HOST" "
+        cd $REMOTE_TMP_DIR
+        echo 'Available packages:'
+        ls -la *.deb
+        echo
+        echo 'Package details:'
+        for deb in *.deb; do
+            echo \"=== \$deb ===\"
+            dpkg-deb --info \"\$deb\" | grep -E '(Package|Version|Architecture|Description)'
+            echo
+        done
+    "
+}
+
+install_packages() {
+    print_status "Installing packages on target device..."
+
+    # Create installation script
+    local install_script=$(cat << 'EOF'
+#!/bin/bash
+set -e
+
+cd /tmp/kernel-packages
+
+echo "=== Current kernel ==="
+uname -r
+
+echo "=== Available disk space ==="
+df -h /
+
+echo "=== Installing packages ==="
+# Install in correct order: headers first, then image
+if ls linux-headers-*.deb >/dev/null 2>&1; then
+    echo "Installing headers..."
+    dpkg -i linux-headers-*.deb
+fi
+
+if ls linux-image-[0-9]*.deb >/dev/null 2>&1; then
+    echo "Installing kernel image..."
+    dpkg -i linux-image-[0-9]*.deb
+fi
+
+if ls linux-firmware-*.deb >/dev/null 2>&1; then
+    echo "Installing firmware..."
+    dpkg -i linux-firmware-*.deb
+fi
+
+echo "=== Installation complete ==="
+echo "Installed packages:"
+dpkg -l | grep linux-image
+dpkg -l | grep linux-headers
+
+echo "=== Boot configuration ==="
+if [[ -f /boot/uEnv.txt ]]; then
+    echo "Current uEnv.txt:"
+    grep uname_r /boot/uEnv.txt || echo "No uname_r found"
+fi
+
+echo "=== Ready to reboot ==="
+echo "New kernel will be active after reboot"
+echo "Run 'reboot' when ready"
+EOF
+)
+
+    # Execute installation on remote device
+    ssh "$REMOTE_USER@$REMOTE_HOST" "$install_script"
+
+    print_success "Packages installed successfully!"
+    print_warning "Reboot the device to use the new kernel"
+
+    # Ask if user wants to reboot now
+    echo
+    read -p "Reboot device now? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Rebooting device..."
+        ssh "$REMOTE_USER@$REMOTE_HOST" "reboot" || true
+        print_success "Reboot initiated"
+    else
+        print_status "Manual reboot required: ssh $REMOTE_USER@$REMOTE_HOST 'reboot'"
+    fi
+}
+
+cleanup_old_packages() {
+    print_status "Cleaning up old packages..."
+
+    # Clean local packages older than 7 days
+    find "$DEPLOY_DIR/packages" -name "*.deb" -mtime +7 -delete 2>/dev/null || true
+
+    # Clean remote packages
+    ssh "$REMOTE_USER@$REMOTE_HOST" "
+        # Keep only the 3 most recent package sets
+        cd $REMOTE_TMP_DIR 2>/dev/null || exit 0
+        ls -t linux-image-*.deb 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
+        ls -t linux-headers-*.deb 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
+    " 2>/dev/null || true
+
+    print_success "Cleanup completed"
+}
+
+main() {
+    local action="full"
+    local clean_build=""
+    local no_debug=""
+
+    # Parse arguments
+    for arg in "$@"; do
+        case $arg in
+            build-only)
+                action="build"
+                ;;
+            deploy-only)
+                action="deploy"
+                ;;
+            clean-build)
+                clean_build="clean"
+                ;;
+            no-debug)
+                no_debug="no-debug"
+                ;;
+            help|--help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $arg (use 'help' for usage)"
+                ;;
+        esac
+    done
+
+    print_status "Enhanced Kernel Sync Script - Debian Package Method"
+    print_status "============================================"
+
+    # Validate environment
+    if [[ ! -d "$BB_KERNEL_DIR" ]]; then
+        print_error "bb-kernel directory not found: $BB_KERNEL_DIR"
+    fi
+
+    if [[ ! -d "$KERNEL_DIR" ]]; then
+        print_error "KERNEL directory not found: $KERNEL_DIR"
+    fi
+
+    # Detect kernel version
+    detect_kernel_version
+
+    # Execute based on action
+    case $action in
+        "build")
+            check_dependencies
+            build_debian_packages "$clean_build" "$no_debug"
+            validate_packages
+            print_success "Build completed. Use 'deploy-only' to deploy packages."
+            ;;
+        "deploy")
+            if [[ ! -d "$DEPLOY_DIR/packages" ]] || [[ -z "$(ls -A "$DEPLOY_DIR/packages"/*.deb 2>/dev/null)" ]]; then
+                print_error "No packages found. Run 'build-only' first."
+            fi
+            deploy_packages
+            install_packages
+            cleanup_old_packages
+            ;;
+        "full")
+            check_dependencies
+            build_debian_packages "$clean_build" "$no_debug"
+            validate_packages
+            deploy_packages
+            install_packages
+            cleanup_old_packages
+            print_success "Complete kernel deployment finished!"
+            ;;
+    esac
+
+    print_success "Script completed successfully!"
+}
+
+# Run main function with all arguments
+main "$@"

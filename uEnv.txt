@@ -1,0 +1,12 @@
+dtb=am335x-boneblack.dtb
+#enable_uboot_overlays=1
+#uboot_overlay_addr0=<file0>.dtbo
+###Custom Cape
+#dtb_overlay=<file8>.dtbo
+#uboot_overlay_addr0=/lib/firmware/BB-GPIO-P8_12-IN-00A0.dtbo
+#uboot_overlay_addr1=/lib/firmware/BB-GPIO-P8_26-OUT-00A0.dtbo
+#enable_uboot_cape_universal=1
+#cmdline=coherent_pool=1M net.ifnames=0 lpj=1990656 rng_core.default_quality=100 quiet
+cmdline=coherent_pool=1M net.ifnames=0 lpj=1990656 rng_core.default_quality=100
+uboot_delay=3
+

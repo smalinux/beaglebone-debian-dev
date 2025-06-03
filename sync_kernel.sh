@@ -274,7 +274,7 @@ push_kernel() {
         print_success "All files copied successfully"
 
         # Extract DTBs and modules if they exist
-        print_status "Extracting archives..."
+        print_status "Extracting archives and setting up kernel..."
         ssh "$REMOTE_USER@$REMOTE_HOST" "
             cd /boot
 
@@ -290,6 +290,47 @@ push_kernel() {
                 cd /lib/modules
                 tar -xzf /boot/*-modules.tar.gz && rm /boot/*-modules.tar.gz
                 depmod -a
+            fi
+
+            # Create vmlinuz symlink from zImage
+            cd /boot
+            if ls *.zImage >/dev/null 2>&1; then
+                ZIMAGE_FILE=\$(ls *.zImage | head -1)
+                KERNEL_VERSION=\$(echo \$ZIMAGE_FILE | sed 's/.zImage//')
+
+                echo \"Creating vmlinuz-\$KERNEL_VERSION from \$ZIMAGE_FILE\"
+                cp \$ZIMAGE_FILE vmlinuz-\$KERNEL_VERSION
+
+                # Also create the standard zImage symlink
+                cp \$ZIMAGE_FILE zImage
+
+                echo \"Kernel files created:\"
+                ls -la zImage vmlinuz-\$KERNEL_VERSION \$ZIMAGE_FILE
+            fi
+        "
+
+        # Update uEnv.txt to use new kernel
+        print_status "Updating uEnv.txt for new kernel..."
+        ssh "$REMOTE_USER@$REMOTE_HOST" "
+            cd /boot
+
+            # Find the new kernel version from zImage filename
+            NEW_KERNEL=\$(ls *.zImage | head -1 | sed 's/.zImage//')
+
+            if [[ -n \"\$NEW_KERNEL\" ]]; then
+                echo \"Found new kernel: \$NEW_KERNEL\"
+
+                # Backup current uEnv.txt
+                cp uEnv.txt uEnv.txt.backup.\$(date +%Y%m%d_%H%M%S)
+
+                # Update uname_r line
+                sed -i \"s/^uname_r=.*/uname_r=\$NEW_KERNEL/\" uEnv.txt
+
+                echo \"Updated uEnv.txt to use kernel: \$NEW_KERNEL\"
+                echo \"Current uEnv.txt content:\"
+                cat uEnv.txt
+            else
+                echo \"Warning: Could not determine new kernel version\"
             fi
         "
 
